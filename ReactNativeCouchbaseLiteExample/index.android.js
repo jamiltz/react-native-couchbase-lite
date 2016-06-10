@@ -12,6 +12,7 @@ var {
   View,
   Image,
   ListView,
+  TouchableHighlight
 } = React;
 
 var ReactCBLite = require('react-native').NativeModules.ReactCBLite;
@@ -19,6 +20,7 @@ ReactCBLite.init(5984, 'admin', 'password', (e) => {
 });
 
 var {manager} = require('react-native-couchbase-lite');
+var database = new manager('http://admin:password@localhost:5984/', 'myapp');
 
 var ReactNativeCouchbaseLiteExample = React.createClass({
   render: function () {
@@ -33,77 +35,87 @@ var Home = React.createClass({
     return {
       dataSource: new ListView.DataSource({
         rowHasChanged: (row1, row2) => row1 !== row2,
-      }),
-      sequence: '',
-      filteredMovies: ''
+      })
     }
   },
   componentDidMount() {
-    var database = new manager('http://admin:password@localhost:5984/', 'myapp');
-    database.createDatabase()
-      .then((res) => {
-        database.createDesignDocument('main', {
-          'filters': {
-            'year': 'function (doc) { if (doc.year === 2004) {return true;} return false;}'
-          },
+    database.getInfo()
+      .then(res => {
+        if (res.status == 404) { // database doesn't exist
+          return database.createDatabase();
+        }
+      })
+      .then(res => {
+        return database.createDesignDocument('main', {
           'views': {
-            'movies': {
-              'map': 'function (doc) {if (doc.year) {emit(doc._id, null);}}'
+            'docs': {
+              'map': 'function (doc) {if (doc.test_doc) {emit(doc._id, doc._rev);}}'
             }
           }
-        });
-        database.replicate('http://localhost:4984/moviesapp', 'myapp');
-        database.getInfo()
-          .then((res) => {
-            database.listen({since: res.update_seq - 1, feed: 'longpoll'});
-            database.changesEventEmitter.on('changes', function (e) {
-              this.setState({sequence: e.last_seq});
-            }.bind(this));
-            // database.listen({seq: 0, feed: 'longpoll', filter: 'main/year'});
-            // database.changesEventEmitter.on('changes', function (e) {
-            //   this.setState({filteredMovies: e.last_seq});
-            // }.bind(this));
-          });
+        })
       })
-      .then((res) => {
-        return database.queryView('main', 'movies', {include_docs: true});
+      .then(res => {
+        database.replicate('http://localhost:4984/myapp', 'myapp', true);
+        database.replicate('myapp', 'http://localhost:4984/myapp', true);
+      });
+  },
+  _onPressCreate() {
+    database.updateDocument({test_doc: true}, 123)
+      .then(res => {
+        console.log(res);
+        console.log('Doc with ID ' + res._id + ' created');
       })
-      .then((res) => {
+  },
+  _onPressUpdate() {
+    database.getDocument('123')
+      .then(res => {
+        res.time = new Date();
+        database.updateDocument(res, 123, res._rev)
+          .then(res => {
+            console.log(res);
+          })
+      })
+  },
+  _onPressRefresh() {
+    database.queryView('main', 'docs')
+      .then(res => {
         this.setState({
           dataSource: this.state.dataSource.cloneWithRows(res.rows)
         });
-      })
-      .catch((ex) => {
-        console.log(ex)
+      });
+  },
+  _onPressDelete() {
+    database.deleteDatabase()
+      .then(res => {
+        if (res.ok) {
+          alert('db deleted');
+        }
       });
   },
   render() {
     return (
       <View>
-        <Text style={styles.seqTextLabel}>
-          The database sequence: {this.state.sequence}
-        </Text>
-        <Text>
-          Movies published in 2004: {this.state.filteredMovies}
-        </Text>
-        <ListView
-          dataSource={this.state.dataSource}
-          renderRow={this.renderMovie}
-          style={styles.listView}/>
+        <TouchableHighlight onPress={this._onPressDelete}>
+          <Text>Delete database</Text>
+        </TouchableHighlight>
+        <TouchableHighlight onPress={this._onPressCreate}>
+          <Text>Create doc with ID 123</Text>
+        </TouchableHighlight>
+        <TouchableHighlight onPress={this._onPressUpdate}>
+          <Text>Update doc with ID 123</Text>
+        </TouchableHighlight>
+        <TouchableHighlight onPress={this._onPressRefresh}>
+          <Text>Refresh</Text>
+        </TouchableHighlight>
+        <ListView   dataSource={this.state.dataSource} 
+                    renderRow={this.renderRow} />
       </View>
     )
   },
-  renderMovie(movie) {
-    var movie = movie.doc;
+  renderRow(row) {
     return (
-      <View style={styles.container}>
-        <Image
-          source={{uri: movie.posters.thumbnail}}
-          style={styles.thumbnail}/>
-        <View style={styles.rightContainer}>
-          <Text style={styles.title}>{movie.title}</Text>
-          <Text style={styles.year}>{movie.year}</Text>
-        </View>
+      <View>
+        <Text>ID: {row.key}, Rev: {row.value}</Text>
       </View>
     );
   }
